@@ -17,13 +17,52 @@ const (
 	GameTurnComplete = iota
 )
 
+type CustomMsg int
+
+func (cm CustomMsg) Msg() {}
+
+const (
+	MessageReceived = iota
+)
+
+type GameMessage struct {
+	Name  string `json:"name"`
+	MoveX int    `json:"moveX"`
+	MoveY int    `json:"moveY"`
+}
+
+func (gm GameMessage) Msg() {}
+
+func (m *Model) sendMessage(x int, y int) tea.Msg {
+	var conn net.Conn
+	var err error
+	for {
+		conn, err = net.Dial("tcp", otherAddress(m.name))
+		if err == nil {
+			break
+		}
+	}
+
+	gm := GameMessage{Name: m.name, MoveX: x, MoveY: y}
+	data, err := json.Marshal(gm)
+	if err != nil {
+		panic(err)
+	}
+	conn.Write(data)
+
+	m.board[x][y] = m.piece
+	m.turn = otherPiece(m.piece)
+	return CustomMsg(MessageReceived)
+}
+
 type Model struct {
-	server bool
-	piece  Piece
-	curX   int
-	curY   int
-	turn   Piece
-	board  [3][3]Piece
+	address string
+	name    string
+	piece   Piece
+	curX    int
+	curY    int
+	turn    Piece
+	board   [3][3]Piece
 }
 
 const (
@@ -40,69 +79,21 @@ const (
 
 func (gm GameMsg) Msg() {}
 
-// func handleConnection(conn net.Conn) {
-// 	buf := make([]byte, 13)
-// 	conn.Read(buf)
-// 	fmt.Printf("%s", buf)
-// 	conn.Close()
-// }
-
-// func startServer() {
-// 	lnr, err := net.Listen("tcp", ":8080")
-// 	if err != nil {
-// 		panic(err)
-// 	}
-
-// 	defer lnr.Close()
-
-// 	for {
-// 		conn, err := lnr.Accept()
-// 		if err != nil {
-// 			panic(err)
-// 		}
-// 		go handleConnection(conn)
-// 	}
-// }
-
-// func startClient() {
-// 	var err error
-
-// 	rdr := bufio.NewReader(os.Stdin)
-// 	var msg string
-
-// 	for {
-// 		fmt.Printf("Huh?: ")
-// 		msg, err = rdr.ReadString('\n')
-// 		if err != nil {
-// 			panic(err)
-// 		}
-// 		msg = strings.TrimSpace(msg)
-
-// 		if len(msg) > 0 {
-// 			conn, err := net.Dial("tcp", ":8080")
-// 			if err != nil {
-// 				panic(err)
-// 			}
-
-// 			fmt.Fprint(conn, msg)
-// 		}
-// 	}
-// }
-
-func New(isServer bool, pi Piece) *Model {
+func New(address string, name string, pi Piece) *Model {
 	var tr Piece
-	if isServer {
+	if name == "alice" {
 		tr = pi
 	} else {
 		tr = otherPiece(pi)
 	}
 
 	return &Model{
-		server: isServer,
-		piece:  pi,
-		turn:   tr,
-		curX:   0,
-		curY:   0,
+		address: address,
+		name:    name,
+		piece:   pi,
+		turn:    tr,
+		curX:    0,
+		curY:    0,
 		board: [3][3]Piece{
 			{NoPieces, NoPieces, NoPieces},
 			{NoPieces, NoPieces, NoPieces},
@@ -112,8 +103,6 @@ func New(isServer bool, pi Piece) *Model {
 }
 
 func (m *Model) Init() tea.Cmd {
-	m.startServer()
-
 	return nil
 }
 
@@ -164,36 +153,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			if m.board[m.curX][m.curY] == NoPiece {
-				m.board[m.curX][m.curY] = m.piece
-				m.turn = otherPiece(m.piece)
-				return m, m.gameTurnComplete
+				// m.board[m.curX][m.curY] = m.piece
+				m.turn = NoPiece
+				return m, func() tea.Msg { return m.sendMessage(m.curX, m.curY) }
 			}
 		}
 		return m, nil
+	case GameMessage:
+		m.board[msg.MoveX][msg.MoveY] = otherPiece(m.piece)
+		m.turn = m.piece
 	}
 
 	return m, nil
 }
 
-func (m *Model) gameTurnComplete() tea.Msg {
-	return GameMsg(GameTurnComplete)
-}
-
-// rdr := bufio.NewReader(os.Stdin)
-// 	fmt.Print("What?: ")
-// 	cmd, err := rdr.ReadString('\n')
-// 	if err != nil {
-// 		panic(err)
-// 	}
-
-// 	cmd = strings.TrimSpace(cmd)
-
-// 	switch cmd {
-// 	case "server", "s":
-// 		startServer()
-// 	case "client", "c":
-// 		startClient()
-// 	}
+// func (m *Model) gameTurnComplete() tea.Msg {
+// 	return GameMsg(GameTurnComplete)
+// }
 
 func (p Piece) String() string {
 	switch p {
@@ -254,23 +230,23 @@ type Move struct {
 	Piece string
 }
 
-func (m *Model) handleConnection(conn net.Conn) {
-	var buf []byte
-	conn.Read(buf)
+func receiveMessage(program *tea.Program, conn net.Conn) {
+	defer conn.Close()
 
-	var mv Move
+	buf := make([]byte, 256)
+	bytesRead, _ := conn.Read(buf)
 
-	json.Unmarshal(buf, &mv)
+	var gm GameMessage
+	json.Unmarshal(buf[0:bytesRead], &gm)
 
-	conn.Close()
+	program.Send(gm)
 }
 
-func (m *Model) startServer() {
-	lnr, err := net.Listen("tcp", ":8080")
+func startServer(program *tea.Program, address string) {
+	lnr, err := net.Listen("tcp", address)
 	if err != nil {
 		panic(err)
 	}
-
 	defer lnr.Close()
 
 	for {
@@ -278,21 +254,33 @@ func (m *Model) startServer() {
 		if err != nil {
 			panic(err)
 		}
-		go m.handleConnection(conn)
+		go receiveMessage(program, conn)
 	}
+}
+
+func otherAddress(name string) string {
+	var other string
+	switch name {
+	case "alice":
+		other = ":4040"
+	case "bob":
+		other = ":8080"
+	}
+	return other
 }
 
 func main() {
 	args := os.Args[1:]
 
-	var isServer bool
+	var name string
+	var address string
 	switch args[0] {
-	case "s", "server":
-		isServer = true
-	case "c", "client":
-		isServer = false
-	default:
-		panic("unknown role")
+	case "a", "A", "alice":
+		name = "alice"
+		address = ":8080"
+	case "b", "B", "bob":
+		name = "bob"
+		address = ":4040"
 	}
 
 	var piece Piece
@@ -305,7 +293,9 @@ func main() {
 		panic("unknown piece")
 	}
 
-	p := tea.NewProgram(New(isServer, piece))
+	p := tea.NewProgram(New(address, name, piece))
+
+	go startServer(p, address)
 
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Alas, there's been an error: %v", err)
