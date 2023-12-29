@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -35,7 +36,7 @@ func New(address string, name string) *Model {
 }
 
 func (m *Model) Init() tea.Cmd {
-	return nil
+	return textinput.Blink
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -62,13 +63,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.chatInput.Reset()
 		}
 	case ChatMessage:
-		m.chatHistory = append(m.chatHistory, msg.text)
-		m.chatView.SetContent(m.renderChatHistory())
-		// log.Printf("received: %s", msg.text)
+		m.appendChatHistory(msg)
 		return m, tea.Batch(viewCmd, inputCmd)
 	}
 
 	return m, tea.Batch(viewCmd, inputCmd)
+}
+
+func (m *Model) appendChatHistory(cm ChatMessage) {
+	chatLine := fmt.Sprintf("%s: %s", cm.Name, cm.Text)
+	m.chatHistory = append(m.chatHistory, chatLine)
+	m.chatView.SetContent(m.renderChatHistory())
 }
 
 type CustomMsg int
@@ -80,8 +85,8 @@ const (
 )
 
 type ChatMessage struct {
-	foo  int
-	text string
+	Name string `json:"name"`
+	Text string `json:"text"`
 }
 
 func (cm ChatMessage) Msg() {}
@@ -96,13 +101,14 @@ func (m *Model) sendMessage(msg string) tea.Msg {
 		}
 	}
 
-	conn.Write([]byte(msg))
-	// bytesWritten, err := conn.Write([]byte(msg))
-	// log.Printf("wrote %d bytes", bytesWritten)
-	// if err != nil {
-	// 	log.Printf("errored: %v", err)
-	// }
+	cm := ChatMessage{Name: m.name, Text: msg}
+	data, err := json.Marshal(cm)
+	if err != nil {
+		panic(err)
+	}
+	conn.Write(data)
 
+	m.appendChatHistory(cm)
 	return CustomMsg(MessageReceived)
 }
 
@@ -118,23 +124,16 @@ func (m *Model) renderChatHistory() string {
 }
 
 func receiveMessage(program *tea.Program, conn net.Conn) {
-
 	defer conn.Close()
-
-	// log.Print("parsing...")
 
 	buf := make([]byte, 256)
 	bytesRead, _ := conn.Read(buf)
-	text := string(buf[0:bytesRead])
+	// text := string(buf[0:bytesRead])
 
-	// log.Printf("parsed: %d bytes", bytesRead)
-	// if err != nil {
-	// 	log.Printf("errored: %v", err)
-	// }
+	var cm ChatMessage
+	json.Unmarshal(buf[0:bytesRead], &cm)
 
-	// log.Printf("parsed: %s", text)
-
-	program.Send(ChatMessage{foo: 200, text: text})
+	program.Send(cm)
 }
 
 func startServer(program *tea.Program, address string) {
@@ -142,10 +141,7 @@ func startServer(program *tea.Program, address string) {
 	if err != nil {
 		panic(err)
 	}
-
 	defer lnr.Close()
-
-	// log.Print("listening...")
 
 	for {
 		conn, err := lnr.Accept()
