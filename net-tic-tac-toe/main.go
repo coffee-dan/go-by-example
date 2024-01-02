@@ -258,6 +258,121 @@ func startServer(program *tea.Program, address string) {
 	}
 }
 
+type Game struct {
+	ID             string
+	Player1Name    string
+	Player1Address string
+	Player2Name    string
+	Player2Address string
+}
+
+type Server struct {
+	GameList []Game
+}
+
+type Request struct {
+	GameID        string `json:"gameID"`
+	RecipientName string `json:"recipientName"`
+	RequestType   string `json:"requestType"`
+	RequestData   []byte `json:"requestData"`
+}
+
+func (s *Server) startRelay() {
+	lnr, err := net.Listen("tcp", ":3030")
+	if err != nil {
+		panic(err)
+	}
+	defer lnr.Close()
+
+	for {
+		conn, err := lnr.Accept()
+		if err != nil {
+			panic(err)
+		}
+		go s.routeIncomingRequest(conn)
+	}
+}
+
+func (s *Server) routeIncomingRequest(conn net.Conn) {
+	defer conn.Close()
+
+	buf := make([]byte, 256)
+	bytesRead, _ := conn.Read(buf)
+
+	var req Request
+	err := json.Unmarshal(buf[0:bytesRead], &req)
+	if err != nil {
+		// should tell sender request failed (new connection? just a response?)
+		panic(err)
+	}
+
+	var game Game
+	game, err = s.findGameById(req.GameID)
+	if err != nil {
+		// tell sender could not find game
+		panic(err)
+	}
+
+	switch req.RequestType {
+	case "Move":
+		var mov Move
+		err = json.Unmarshal(req.RequestData, &mov)
+		if err != nil {
+			// should tell sender request failed (new connection? just a response?)
+			panic(err)
+		}
+
+		s.sendMove(game, req.RecipientName, mov)
+	}
+
+	// program.Send(gm)
+}
+
+func (s *Server) sendMove(game Game, recipientName string, move Move) {
+	var address string
+	switch recipientName {
+	case game.Player1Address:
+		address = game.Player1Address
+	case game.Player2Name:
+		address = game.Player2Address
+	default:
+		// tell sender player is not part of this game
+		panic(err)
+	}
+
+	var conn net.Conn
+	var err error
+	for {
+		conn, err = net.Dial("tcp", address)
+		if err == nil {
+			break
+		}
+	}
+
+	data, err := json.Marshal(move)
+	if err != nil {
+		panic(err)
+	}
+	conn.Write(data)
+}
+
+func (s *Server) findGameById(id string) (Game, error) {
+	for _, gm := range s.GameList {
+		if gm.ID == id {
+			return gm, nil
+		}
+	}
+	return Game{}, CustomError{desc: "Not found"}
+}
+
+type CustomError struct {
+	desc string
+}
+
+func (ce CustomError) Error() string {
+	return ce.desc
+}
+
 func otherAddress(name string) string {
 	var other string
 	switch name {
