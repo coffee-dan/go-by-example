@@ -33,21 +33,39 @@ type GameMessage struct {
 
 func (gm GameMessage) Msg() {}
 
+type StatusMessage string
+
+func (sm StatusMessage) Msg() {}
+
+func (sm StatusMessage) String() string {
+	return string(sm)
+}
+
 func (m *Model) sendMessage(x int, y int) tea.Msg {
 	var conn net.Conn
 	var err error
 	for {
-		conn, err = net.Dial("tcp", otherAddress(m.name))
+		conn, err = net.Dial("tcp", ":3030")
 		if err == nil {
 			break
 		}
 	}
 
-	gm := GameMessage{Name: m.name, MoveX: x, MoveY: y}
-	data, err := json.Marshal(gm)
+	requestData, err := json.Marshal(GameMessage{Name: m.name, MoveX: x, MoveY: y})
 	if err != nil {
 		panic(err)
 	}
+
+	data, err := json.Marshal(Request{
+		GameID:        m.gameID,
+		RecipientName: otherName(m.name),
+		RequestType:   "GameMessage",
+		RequestData:   requestData,
+	})
+	if err != nil {
+		panic(err)
+	}
+
 	conn.Write(data)
 
 	m.board[x][y] = m.piece
@@ -56,6 +74,7 @@ func (m *Model) sendMessage(x int, y int) tea.Msg {
 }
 
 type Model struct {
+	gameID  string
 	address string
 	name    string
 	piece   Piece
@@ -63,6 +82,7 @@ type Model struct {
 	curY    int
 	turn    Piece
 	board   [3][3]Piece
+	status  string
 }
 
 const (
@@ -88,6 +108,7 @@ func New(address string, name string, pi Piece) *Model {
 	}
 
 	return &Model{
+		gameID:  "0",
 		address: address,
 		name:    name,
 		piece:   pi,
@@ -99,6 +120,7 @@ func New(address string, name string, pi Piece) *Model {
 			{NoPieces, NoPieces, NoPieces},
 			{NoPieces, NoPieces, NoPieces},
 		},
+		status: "starting...",
 	}
 }
 
@@ -162,6 +184,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case GameMessage:
 		m.board[msg.MoveX][msg.MoveY] = otherPiece(m.piece)
 		m.turn = m.piece
+	case StatusMessage:
+		fmt.Print(msg.String())
+		m.status = msg.String()
 	}
 
 	return m, nil
@@ -221,7 +246,9 @@ func (m *Model) renderBoard() string {
 }
 
 func (m *Model) View() string {
-	return m.renderBoard()
+	return fmt.Sprintf(
+		"%s\n%s\n\n%s", m.name, m.renderBoard(), m.status,
+	)
 }
 
 type Move struct {
@@ -233,11 +260,19 @@ type Move struct {
 func receiveMessage(program *tea.Program, conn net.Conn) {
 	defer conn.Close()
 
+	// fmt.Print("receiving message")
+	program.Send(StatusMessage("receiving message"))
+
 	buf := make([]byte, 256)
 	bytesRead, _ := conn.Read(buf)
 
 	var gm GameMessage
-	json.Unmarshal(buf[0:bytesRead], &gm)
+	err := json.Unmarshal(buf[0:bytesRead], &gm)
+	if err != nil {
+		panic(
+			fmt.Sprintf("could not parse received move\n%v\n%e", gm, err),
+		)
+	}
 
 	program.Send(gm)
 }
@@ -249,11 +284,14 @@ func startServer(program *tea.Program, address string) {
 	}
 	defer lnr.Close()
 
+	program.Send(StatusMessage("sanity check..."))
+
 	for {
 		conn, err := lnr.Accept()
 		if err != nil {
 			panic(err)
 		}
+		program.Send(StatusMessage("got a connection..."))
 		go receiveMessage(program, conn)
 	}
 }
@@ -261,8 +299,10 @@ func startServer(program *tea.Program, address string) {
 type Game struct {
 	ID             string
 	Player1Name    string
+	Player1Piece   Piece
 	Player1Address string
 	Player2Name    string
+	Player2Piece   Piece
 	Player2Address string
 }
 
@@ -275,6 +315,22 @@ type Request struct {
 	RecipientName string `json:"recipientName"`
 	RequestType   string `json:"requestType"`
 	RequestData   []byte `json:"requestData"`
+}
+
+func NewRelay() *Server {
+	return &Server{
+		GameList: []Game{
+			{
+				ID:             "0",
+				Player1Name:    "alice",
+				Player1Piece:   XPiece,
+				Player1Address: ":8080",
+				Player2Name:    "bob",
+				Player2Piece:   OPiece,
+				Player2Address: ":4040",
+			},
+		},
+	}
 }
 
 func (s *Server) startRelay() {
@@ -296,39 +352,57 @@ func (s *Server) startRelay() {
 func (s *Server) routeIncomingRequest(conn net.Conn) {
 	defer conn.Close()
 
-	buf := make([]byte, 256)
+	buf := make([]byte, 512)
 	bytesRead, _ := conn.Read(buf)
+
+	// fmt.Printf("bytes: %d\n%s\n\n", bytesRead, string(buf))
 
 	var req Request
 	err := json.Unmarshal(buf[0:bytesRead], &req)
 	if err != nil {
 		// should tell sender request failed (new connection? just a response?)
-		panic(err)
+		panic(
+			fmt.Sprintf("send request failed, bad json?\n%s\n%e", string(buf), err),
+		)
 	}
 
 	var game Game
 	game, err = s.findGameById(req.GameID)
 	if err != nil {
 		// tell sender could not find game
-		panic(err)
+		panic(
+			fmt.Sprintf("sender could not find game\n%v\n%v\n%e", req, req.GameID, err),
+		)
 	}
 
 	switch req.RequestType {
-	case "Move":
-		var mov Move
-		err = json.Unmarshal(req.RequestData, &mov)
+	case "GameMessage":
+		var gm GameMessage
+		err = json.Unmarshal(req.RequestData, &gm)
 		if err != nil {
 			// should tell sender request failed (new connection? just a response?)
-			panic(err)
+			panic(
+				fmt.Sprintf("request data bad json?\n%s\n%e", string(req.RequestData), err),
+			)
 		}
 
-		s.sendMove(game, req.RecipientName, mov)
+		s.sendGameMessage(game, req.RecipientName, gm)
 	}
-
-	// program.Send(gm)
 }
 
-func (s *Server) sendMove(game Game, recipientName string, move Move) {
+func otherName(name string) string {
+	switch name {
+	case "alice":
+		return "bob"
+	case "bob":
+		return "alice"
+	default:
+		panic("who in the world?")
+	}
+}
+
+func (s *Server) sendGameMessage(game Game, recipientName string, gm GameMessage) {
+	fmt.Printf("sending to %s", recipientName)
 	var address string
 	switch recipientName {
 	case game.Player1Address:
@@ -337,7 +411,7 @@ func (s *Server) sendMove(game Game, recipientName string, move Move) {
 		address = game.Player2Address
 	default:
 		// tell sender player is not part of this game
-		panic(err)
+		panic("lole")
 	}
 
 	var conn net.Conn
@@ -349,11 +423,18 @@ func (s *Server) sendMove(game Game, recipientName string, move Move) {
 		}
 	}
 
-	data, err := json.Marshal(move)
+	fmt.Printf("%v", gm)
+
+	data, err := json.Marshal(gm)
 	if err != nil {
 		panic(err)
 	}
-	conn.Write(data)
+
+	_, err = conn.Write(data)
+	if err != nil {
+		panic(err)
+	}
+
 }
 
 func (s *Server) findGameById(id string) (Game, error) {
@@ -373,47 +454,46 @@ func (ce CustomError) Error() string {
 	return ce.desc
 }
 
-func otherAddress(name string) string {
-	var other string
-	switch name {
-	case "alice":
-		other = ":4040"
-	case "bob":
-		other = ":8080"
-	}
-	return other
-}
+// func otherAddress(name string) string {
+// 	var other string
+// 	switch name {
+// 	case "alice":
+// 		other = ":4040"
+// 	case "bob":
+// 		other = ":8080"
+// 	}
+// 	return other
+// }
 
 func main() {
 	args := os.Args[1:]
 
-	var name string
 	var address string
-	switch args[0] {
-	case "a", "A", "alice":
-		name = "alice"
-		address = ":8080"
-	case "b", "B", "bob":
-		name = "bob"
-		address = ":4040"
-	}
-
+	var name string
 	var piece Piece
-	switch args[1] {
+	switch args[0] {
 	case "x", "X":
+		address = ":8080"
+		name = "alice"
 		piece = XPiece
 	case "o", "O":
+		address = ":4040"
+		name = "bob"
 		piece = OPiece
 	default:
-		panic("unknown piece")
+		NewRelay().startRelay()
 	}
 
-	p := tea.NewProgram(New(address, name, piece))
+	if piece != NoPiece {
+		p := tea.NewProgram(New(address, name, piece))
 
-	go startServer(p, address)
+		go startServer(p, ":3030")
 
-	if _, err := p.Run(); err != nil {
-		fmt.Printf("Alas, there's been an error: %v", err)
-		os.Exit(1)
+		if _, err := p.Run(); err != nil {
+			fmt.Printf("Alas, there's been an error: %v", err)
+			os.Exit(1)
+		}
+
 	}
+
 }
