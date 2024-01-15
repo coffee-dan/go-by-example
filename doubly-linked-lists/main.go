@@ -226,8 +226,50 @@ func testDoublyLinkedList() string {
 	return list.String()
 }
 
+func (ll *LinkedList) CloneReversed() *LinkedList {
+	revLL := LinkedList{}
+
+	for node := ll.head; node != nil; node = node.next {
+		revLL.prepend(node.value)
+	}
+
+	return &revLL
+}
+
+func (ll *LinkedList) Reverse() {
+	prev := ll.head
+	ll.head = ll.tail
+	ll.tail = prev
+
+	curr := prev.next
+	for curr != nil {
+		next := curr.next
+		curr.next = prev
+		prev = curr
+		curr = next
+	}
+
+	ll.tail.next = nil
+}
+
 func main() {
 	fmt.Println(testLinkedList())
 	fmt.Println(testDoublyLinkedList())
 
+	ll := NewLinkedList(1)
+	ll.append(2)
+	ll.append(3)
+	ll.append(4)
+
+	fmt.Println(ll.String())
+
+	rll := ll.CloneReversed()
+
+	fmt.Println(rll.String())
+	fmt.Println(rll.length)
+
+	ll.Reverse()
+
+	fmt.Println(ll.String())
+	fmt.Println(ll.length)
 }
