@@ -57,11 +57,13 @@ func testLinkedListQueue() {
 	llq.Enqueue("Foo")
 	fmt.Println(llq.String())
 	llq.Enqueue("Bar")
+	fmt.Println(llq.String())
 	llq.Enqueue("Baz")
 	fmt.Println(llq.String())
 	llq.Dequeue()
 	fmt.Println(llq.String())
 	llq.Dequeue()
+	fmt.Println(llq.String())
 	llq.Dequeue()
 	fmt.Println(llq.String())
 }
