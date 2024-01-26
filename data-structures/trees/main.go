@@ -59,28 +59,24 @@ func (bst *BinarySearchTree) Remove(value int) *TreeNode {
 	var replacement *TreeNode
 	for {
 		if node.Value == value {
+			junk = node
 			replacement = node.ReplaceWithSuccessor()
-			fmt.Printf("node.Value == value %02d\n", node.Value)
+			break
 		} else if node.Right != nil && node.Right.Value == value {
 			junk = node.Right
 			replacement = junk.ReplaceWithSuccessor()
 			node.Right = replacement
-			fmt.Printf("node.Right != nil && node.Right.Value == value %02d %02d\n", node.Value, junk.Value)
 			break
 		} else if node.Left != nil && node.Left.Value == value {
 			junk = node.Left
 			replacement = junk.ReplaceWithSuccessor()
 			node.Left = replacement
-			fmt.Printf("node.Left != nil && node.Left.Value == value %02d %02d\n", node.Value, junk.Value)
 			break
 		} else if node.Value > value {
 			node = node.Left
-			fmt.Printf("node.Value > value %02d\n", node.Value)
 		} else if node.Value < value {
 			node = node.Right
-			fmt.Printf("node.Value < value %02d\n", node.Value)
 		} else {
-			fmt.Printf("else %02d\n", node.Value)
 			break
 		}
 	}
@@ -93,25 +89,44 @@ func (bst *BinarySearchTree) Remove(value int) *TreeNode {
 
 func (tr *TreeNode) ReplaceWithSuccessor() *TreeNode {
 	if tr.Left == nil && tr.Right == nil {
-		fmt.Println("Replace with nil")
 		return nil
 	}
 	parent := tr
-	replacement := tr.Right
-	for {
-		if replacement.Left == nil && replacement.Right == nil {
-			if tr == parent {
-				parent.Right = nil
-			} else {
-				parent.Left = nil
-			}
+	var replacement *TreeNode
+	if tr.Right != nil {
+		replacement = tr.Right
+		for {
+			if replacement.Left == nil && replacement.Right == nil {
+				if parent == tr {
+					parent.Right = nil
+				} else {
+					parent.Left = nil
+				}
 
-			replacement.Left = tr.Left
-			replacement.Right = tr.Right
-			break
+				replacement.Left = tr.Left
+				replacement.Right = tr.Right
+				break
+			}
+			parent = replacement
+			replacement = replacement.Right
 		}
-		parent = replacement
-		replacement = replacement.Right
+	} else if tr.Left != nil {
+		replacement = tr.Left
+		for {
+			if replacement.Left == nil && replacement.Right == nil {
+				if parent == tr {
+					parent.Left = nil
+				} else {
+					parent.Right = nil
+				}
+
+				replacement.Left = tr.Left
+				replacement.Right = tr.Right
+				break
+			}
+			parent = replacement
+			replacement = replacement.Left
+		}
 	}
 
 	return replacement
@@ -156,8 +171,7 @@ func main() {
 	bst.Remove(15)
 	fmt.Println(bst.String())
 	bst.Remove(9)
-	// fmt.Println(bst.String())
-
-	// fmt.Println(bst.Lookup(170).renderSubtree(""))
-	// fmt.Println(bst.Lookup(20).renderSubtree(""))
+	fmt.Println(bst.String())
+	bst.Remove(4)
+	fmt.Println(bst.String())
 }
